@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Enamel Ultimate v7.6</title>
+    
+    <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://unpkg.com/epubjs@0.3.93/dist/epub.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/remixicon@3.5.0/fonts/remixicon.css" rel="stylesheet">
+
+    <style>
+        :root {
+            --bg-deep: #0f0b15;
+            --bg-menu: #181221;
+            --accent: #d8b4fe;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        /* 全局隐藏滚动条 (外部 UI) */
+        ::-webkit-scrollbar { display: none; }
+        * { -ms-overflow-style: none; scrollbar-width: none; }
+
+        * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+        body, html { height: 100%; width: 100%; margin: 0; overflow: hidden; background: var(--bg-deep); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+
+        /* --- 阅读尺遮罩层 --- */
+        .ruler-mask {
+            position: fixed; left: 0; width: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 50;
+            pointer-events: none; /* 允许鼠标穿透点击 */
+            transition: height 0.3s cubic-bezier(0.25, 1, 0.5, 1);
+            backdrop-filter: blur(2px);
+            display: none;
+        }
+        .ruler-mask.active { display: block; }
+        #ruler-top { top: 0; border-bottom: 1px solid rgba(255,255,255,0.1); box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+        #ruler-bottom { bottom: 0; border-top: 1px solid rgba(255,255,255,0.1); box-shadow: 0 -4px 12px rgba(0,0,0,0.5); }
+
+        /* --- 1. 侧边设置菜单 --- */
+        #side-menu {
+            position: fixed; top: 0; left: -280px; width: 270px; height: 100%;
+            background: var(--bg-menu); border-right: 1px solid var(--border);
+            z-index: 200; padding: 25px 20px;
+            transition: left 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+            box-shadow: none; 
+            display: flex; flex-direction: column; gap: 20px; overflow-y: auto;
+        }
+        #side-menu.active { left: 0; box-shadow: 20px 0 50px rgba(0,0,0,0.8); }
+
+        #menu-mask {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 190;
+            display: none; backdrop-filter: blur(2px);
+            opacity: 0; transition: opacity 0.3s;
+        }
+        #menu-mask.active { display: block; opacity: 1; }
+        
+        .menu-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; color: #fff; font-weight: bold; }
+        .menu-section { display: flex; flex-direction: column; gap: 8px; }
+        .menu-label { color: #64748b; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+        .menu-box { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 10px; color: #cbd5e1; font-size: 13px; }
+        .menu-input { background: transparent; border: none; outline: none; color: white; width: 100%; font-family: monospace; }
+        
+        .font-ctrl-row { display: flex; align-items: center; justify-content: space-between; background: rgba(255,255,255,0.03); border-radius: 8px; padding: 5px; border: 1px solid var(--border); }
+        .font-btn { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; font-size: 18px; color: white; cursor: pointer; }
+        .font-val { font-family: monospace; color: var(--accent); }
+        select.menu-select { width: 100%; background: transparent; color: #fff; border: none; outline: none; }
+        select.menu-select option { background: #181221; }
+
+        input[type=range] { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; -webkit-appearance: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: var(--accent); border-radius: 50%; cursor: pointer; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.03); padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 5px; }
+        .toggle-row span { font-size: 13px; color: #cbd5e1; }
+        .toggle-switch { position: relative; width: 36px; height: 20px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #334155; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--accent); }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        /* --- 2. 阅读器区域 --- */
+        #viewer { position: absolute; top: 0; bottom: 0; left: 0; right: 0; background: var(--bg-deep); z-index: 1; transition: filter 0.3s; }
+        
+        .focus-paragraph { opacity: 1 !important; transform: scale(1.01); text-shadow: 0 0 10px rgba(0,0,0,0.5); color: #fff !important; }
+        .blur-paragraph { opacity: 0.35 !important; filter: grayscale(100%); }
+
+        /* --- 3. 极简底部状态栏 --- */
+        #mini-dock {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(0, 0, 0, 0.4); 
+            backdrop-filter: blur(4px); padding: 6px 16px;
+            border-radius: 20px; border: 1px solid rgba(255,255,255,0.05);
+            gap: 12px; z-index: 60; transition: opacity 0.3s;
+        }
+        .mini-btn { color: #94a3b8; font-size: 18px; cursor: pointer; display: flex; align-items: center; }
+        .mini-progress { font-size: 11px; color: #64748b; font-family: monospace; min-width: 30px; text-align: center; }
+
+        /* --- 4. AI 面板 --- */
+        #mask { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 90; display: none; backdrop-filter: blur(4px); }
+        #mask.active { display: block; }
+        #panel {
+            position: fixed; bottom: -100%; left: 0; right: 0;
+            background: var(--bg-menu); border-radius: 24px 24px 0 0;
+            z-index: 100; height: 75vh; display: flex; flex-direction: column;
+            transition: transform 0.3s cubic-bezier(0.19, 1, 0.22, 1);
+            box-shadow: 0 -10px 50px rgba(0,0,0,0.9); border-top: 1px solid var(--border);
+        }
+        #panel { bottom: 0; transform: translateY(100%); }
+        #panel.active { transform: translateY(0); }
+
+        .panel-header { flex: 0 0 50px; padding: 0 20px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center; color: #94a3b8; }
+        .panel-body { flex: 1; overflow-y: auto; padding: 25px 20px; padding-bottom: 80px; }
+
+        /* AI 内容样式 */
+        .shell-origin { 
+            color: #e9d5ff; font-family: inherit; font-size: 1.1rem; line-height: 1.6; padding: 15px; 
+            background: rgba(255,255,255,0.03); border-radius: 12px; margin-bottom: 20px; 
+            border-left: 3px solid #a855f7; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;
+        }
+        .tts-btn { flex-shrink: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; background: rgba(168, 85, 247, 0.1); border-radius: 50%; color: #d8b4fe; cursor: pointer; transition: 0.2s; }
+        .tts-btn:active { background: #a855f7; color: white; transform: scale(1.1); }
+        .tts-btn:hover { background: rgba(168, 85, 247, 0.2); }
+
+        .mod-title { font-size: 0.7rem; color: #64748b; margin: 15px 0 8px 0; text-transform: uppercase; letter-spacing: 1px; display: flex; gap: 6px; align-items: center; }
+        .trans-text { font-size: 1rem; color: #cbd5e1; line-height: 1.6; }
+        .dict-card { background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(168, 85, 247, 0.08)); border: 1px solid rgba(168, 85, 247, 0.2); border-radius: 16px; padding: 25px; text-align: center; }
+        .dict-en { font-size: 2rem; font-weight: 800; background: linear-gradient(to bottom right, #fff, #d8b4fe); -webkit-background-clip: text; color: transparent; margin-bottom: 5px; }
+        .dict-ipa { color: #64748b; font-family: monospace; font-size: 1rem; margin-bottom: 15px; }
+        .dict-cn { font-size: 1.2rem; color: #a855f7; }
+        .syntax-box { background: #1f1a29; border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; padding: 12px; margin-bottom: 8px; }
+        .st-tag { color: #34d399; font-size: 0.7rem; background: rgba(52, 211, 153, 0.1); padding: 2px 6px; border-radius: 4px; margin-bottom: 4px; display: inline-block; }
+        .st-desc { color: #cbd5e1; font-size: 0.9rem; line-height: 1.4; }
+        .vocab-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed rgba(255,255,255,0.1); }
+        .vi-word { color: #fff; } .vi-cn { color: #a855f7; }
+        .ctx-box { background: rgba(216, 180, 254, 0.05); border: 1px solid rgba(216, 180, 254, 0.1); border-radius: 10px; padding: 15px; margin-top: 8px; }
+        .ctx-text { font-size: 0.95rem; color: #e9d5ff; line-height: 1.6; }
+        .skeleton { height: 14px; background: rgba(255,255,255,0.05); border-radius: 4px; margin-bottom: 8px; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 0.3; } 50% { opacity: 0.6; } 100% { opacity: 0.3; } }
+        ::selection { background: rgba(168, 85, 247, 0.4) !important; color: #fff !important; }
+    </style>
+</head>
+<body>
+
+    <div id="ruler-top" class="ruler-mask"></div>
+    <div id="ruler-bottom" class="ruler-mask"></div>
+
+    <div id="fullscreen-trigger" onclick="toggleFullScreen(); haptic(15)" 
+         class="fixed top-4 left-4 w-10 h-10 rounded-full bg-black/30 backdrop-blur-sm flex items-center justify-center text-white/70 cursor-pointer z-50 hover:bg-black/50 transition-all border border-white/10 active:scale-95 shadow-lg">
+        <i class="ri-fullscreen-line text-xl" id="fs-icon"></i>
+    </div>
+
+    <div id="menu-mask" onclick="toggleMenu()"></div>
+
+    <div id="side-menu">
+        <div class="menu-header"><span>阅读设置</span><i class="ri-close-line" onclick="toggleMenu()"></i></div>
+        <div class="menu-section"><span class="menu-label">当前书籍</span><div class="menu-box" id="menu-book-name">未导入</div></div>
+        <div class="menu-section"><span class="menu-label">导入 EPUB</span><label class="menu-box flex items-center gap-2 cursor-pointer" onclick="haptic(5)"><i class="ri-upload-cloud-line text-purple-400"></i><span>选择文件...</span><input type="file" id="inputFile" accept=".epub" class="hidden"></label></div>
+        <div class="menu-section"><span class="menu-label">API KEY</span><div class="menu-box"><input type="password" id="apiKey" placeholder="输入 Key..." class="menu-input"></div></div>
+        
+        <div class="menu-section" style="border-top:1px solid rgba(255,255,255,0.05); padding-top:15px; margin-top:10px">
+            <span class="menu-label" style="display:block;margin-bottom:10px;color:#d8b4fe">辅助阅读工具</span>
+            <label class="toggle-row">
+                <span>阅读尺 (Reading Ruler)</span>
+                <label class="toggle-switch"><input type="checkbox" id="ruler-switch" onchange="toggleRuler(this.checked); haptic(20)"><span class="slider"></span></label>
+            </label>
+            <div class="menu-section">
+                <span class="menu-label">阅读尺高度</span>
+                <input type="range" id="ruler-height-slider" min="5" max="50" step="1" value="20" oninput="updateRulerHeight(this.value)">
+            </div>
+            <div class="text-xs text-gray-500 mt-1">💡 提示：快速三击屏幕可开关阅读尺</div>
+        </div>
+
+        <div class="menu-section"><span class="menu-label">字体样式</span><div class="menu-box"><select id="font-family" class="menu-select" onchange="updateStyle()"><option value="Georgia, serif">Georgia</option><option value="Times New Roman, serif">Times New Roman</option><option value="Arial, sans-serif">Arial</option><option value="-apple-system, BlinkMacSystemFont, sans-serif">系统默认</option></select></div></div>
+        <div class="menu-section"><span class="menu-label">字体大小</span><div class="font-ctrl-row"><div class="font-btn" onclick="changeFontSize(-1); haptic(5)"><i class="ri-subtract-line"></i></div><div class="font-val" id="font-size-display">19px</div><div class="font-btn" onclick="changeFontSize(1); haptic(5)"><i class="ri-add-line"></i></div></div></div>
+        
+        <div class="menu-section" style="margin-top:10px; border-top:1px solid rgba(255,255,255,0.05); padding-top:15px;">
+            <span class="menu-label" style="display:block;margin-bottom:10px">AI 解析增强</span>
+            <label class="toggle-row"><span>语境解析 (Context)</span><label class="toggle-switch"><input type="checkbox" id="context-switch" onchange="toggleContext(this.checked); haptic(10)"><span class="slider"></span></label></label>
+            <label class="toggle-row"><span>语法分析 (Syntax)</span><label class="toggle-switch"><input type="checkbox" id="syntax-switch" onchange="toggleSyntax(this.checked); haptic(10)"><span class="slider"></span></label></label>
+        </div>
+    </div>
+
+    <div id="viewer"></div>
+
+    <div id="mini-dock">
+        <div class="mini-btn" onclick="toggleMenu(); haptic(10)"><i class="ri-menu-4-line"></i></div>
+        <div style="width:1px; height:12px; background:rgba(255,255,255,0.2)"></div>
+        <div class="mini-progress" id="progress-display">0%</div>
+    </div>
+
+    <div id="mask"></div>
+    <div id="panel">
+        <div class="panel-header"><span><i class="ri-sparkling-fill text-purple-500 mr-2"></i>AI 解析</span><i class="ri-close-line text-2xl p-2 -mr-2 cursor-pointer" onclick="closePanel()"></i></div>
+        <div class="panel-body" id="panel-body"></div>
+    </div>
+
+    <script>
+        const GEMINI_MODEL = "gemini-2.5-flash-lite"; 
+        let book = null, rendition = null;
+        let currentContextParagraph = "", currentSelectedText = "";
+        
+        let currentFontSize = parseInt(localStorage.getItem('fontSize')) || 19;
+        let currentFontFamily = localStorage.getItem('fontFamily') || "Georgia, serif";
+        let currentFontWeight = parseInt(localStorage.getItem('fontWeight')) || 400;
+        let enableContext = localStorage.getItem('enableContext') === 'true';
+        let enableSyntax = localStorage.getItem('enableSyntax') === 'true';
+        let rulerActive = false;
+        let rulerHeightVH = 20; 
+        
+        function haptic(ms = 10) { if (navigator.vibrate) navigator.vibrate(ms); }
+
+        function toggleMenu() { document.getElementById('side-menu').classList.toggle('active'); document.getElementById('menu-mask').classList.toggle('active'); }
+        function closePanel() { document.getElementById('panel').classList.remove('active'); document.getElementById('mask').classList.remove('active'); window.speechSynthesis.cancel(); haptic(10); }
+        document.getElementById('mask').addEventListener('click', closePanel);
+
+        function speakCurrent() { 
+            if(!currentSelectedText)return; 
+            haptic(10);
+            window.speechSynthesis.cancel(); 
+            const u = new SpeechSynthesisUtterance(currentSelectedText); 
+            u.lang='en-US'; 
+            window.speechSynthesis.speak(u); 
+        }
+
+        const apiKeyInput = document.getElementById('apiKey');
+        apiKeyInput.value = localStorage.getItem('gemini_key') || '';
+        apiKeyInput.addEventListener('input', () => localStorage.setItem('gemini_key', apiKeyInput.value));
+        
+        document.getElementById('font-family').value = currentFontFamily;
+        document.getElementById('font-size-display').textContent = currentFontSize + 'px';
+        document.getElementById('context-switch').checked = enableContext;
+        document.getElementById('syntax-switch').checked = enableSyntax;
+
+        // --- Ruler Logic ---
+        function toggleRuler(isActive) {
+            rulerActive = isActive;
+            const top = document.getElementById('ruler-top');
+            const bottom = document.getElementById('ruler-bottom');
+            const switchEl = document.getElementById('ruler-switch');
+            
+            if (isActive) {
+                top.classList.add('active');
+                bottom.classList.add('active');
+                updateRulerHeight(rulerHeightVH);
+                switchEl.checked = true;
+            } else {
+                top.classList.remove('active');
+                bottom.classList.remove('active');
+                switchEl.checked = false;
+            }
+        }
+
+        function updateRulerHeight(vh) {
+            rulerHeightVH = vh;
+            if (!rulerActive) return;
+            const maskHeight = (100 - vh) / 2;
+            document.getElementById('ruler-top').style.height = maskHeight + 'vh';
+            document.getElementById('ruler-bottom').style.height = maskHeight + 'vh';
+        }
+
+        function updateStyle() { currentFontFamily = document.getElementById('font-family').value; localStorage.setItem('fontFamily', currentFontFamily); applyRenderStyles(); }
+        function changeFontSize(delta) { currentFontSize = Math.min(Math.max(12, currentFontSize + delta), 36); document.getElementById('font-size-display').textContent = currentFontSize + 'px'; localStorage.setItem('fontSize', currentFontSize); applyRenderStyles(); }
+        function changeFontWeight(val) { currentFontWeight = val; localStorage.setItem('fontWeight', val); applyRenderStyles(); }
+        function toggleContext(val) { enableContext = val; localStorage.setItem('enableContext', val); }
+        function toggleSyntax(val) { enableSyntax = val; localStorage.setItem('enableSyntax', val); }
+
+        function applyRenderStyles() {
+            if(!rendition) return;
+            rendition.themes.default({
+                "body": { "background-color": "#0f0b15 !important", "color": "#cbd5e1 !important", "padding": "20px 0 100px 0 !important", "font-family": currentFontFamily + " !important" },
+                "p": { "font-size": currentFontSize + "px !important", "line-height": "1.7 !important", "text-align": "justify !important", "font-weight": currentFontWeight + " !important", "margin": "1em 15px !important", "transition": "opacity 0.3s, transform 0.3s" },
+                "a": { "color": "#a855f7 !important" },
+                ".focus-paragraph": { "opacity": "1 !important", "transform": "scale(1.01)", "text-shadow": "0 0 10px rgba(0,0,0,0.5)", "color": "#fff !important" },
+                ".blur-paragraph": { "opacity": "0.35 !important", "filter": "grayscale(100%)" }
+            });
+        }
+
+        // --- 样式注入 ---
+        function injectInnerStyles(contents) {
+            contents.addStylesheetRules({
+                "::-webkit-scrollbar": { "display": "none" },
+                "html": { "scrollbar-width": "none", "-ms-overflow-style": "none" }
+            });
+        }
+
+        const DB_NAME = 'EpubReaderDB', STORE_NAME = 'books';
+        async function openDB() { return new Promise((r, j) => { const req = indexedDB.open(DB_NAME, 1); req.onupgradeneeded = e => e.target.result.createObjectStore(STORE_NAME); req.onsuccess = e => r(e.target.result); req.onerror = e => j(e.target.error); }); }
+        async function saveBookToDB(d, n) { const db = await openDB(); const tx = db.transaction(STORE_NAME, 'readwrite'); tx.objectStore(STORE_NAME).put({ data: d, name: n }, 'last_book'); }
+        async function getLastBook() { const db = await openDB(); return new Promise(r => { const req = db.transaction(STORE_NAME).objectStore(STORE_NAME).get('last_book'); req.onsuccess = () => r(req.result); req.onerror = () => r(null); }); }
+
+        window.addEventListener('load', async () => { const lastBook = await getLastBook(); if (lastBook) loadBook(lastBook.data, lastBook.name); });
+        document.getElementById('inputFile').addEventListener('change', function(e) { const file = e.target.files[0]; if (!file) return; document.getElementById('menu-book-name').textContent = file.name; const reader = new FileReader(); reader.onload = async (e) => { const data = e.target.result; await saveBookToDB(data, file.name); loadBook(data, file.name); if(document.getElementById('side-menu').classList.contains('active')) toggleMenu(); }; reader.readAsArrayBuffer(file); });
+
+        function loadBook(data, fileName) {
+            if (book) book.destroy();
+            document.getElementById('menu-book-name').textContent = fileName;
+            book = ePub(data);
+            rendition = book.renderTo("viewer", { width: "100%", height: "100%", flow: "scrolled", manager: "continuous", allowScriptedContent: true });
+            applyRenderStyles();
+            const savedLocation = localStorage.getItem('last_cfi');
+            if (savedLocation) rendition.display(savedLocation); else rendition.display();
+            
+            rendition.hooks.content.register(injectInnerStyles);
+            rendition.hooks.content.register(setupGestureLock); // 手机专用
+            rendition.hooks.content.register(setupMouseSelection); // 电脑专用 (已修复)
+            rendition.hooks.content.register(setupFocusMode);
+            rendition.hooks.content.register(setupTripleTap);
+
+            rendition.on("relocated", function(location) { localStorage.setItem('last_cfi', location.start.cfi); if (book.locations.length > 0) document.getElementById('progress-display').textContent = Math.floor(book.locations.percentageFromCfi(location.start.cfi) * 100) + "%"; haptic(2); });
+            book.ready.then(() => book.locations.generate(1000));
+        }
+
+        // ===============================================
+        //  Desktop: Mouse Selection System (修复版 + 智能吸附)
+        // ===============================================
+        function setupMouseSelection(contents) {
+            const doc = contents.document;
+            const win = contents.window;
+            
+            contents.addStylesheetRules({ "::selection": { "background": "rgba(168, 85, 247, 0.4)", "color": "white" } });
+
+            doc.addEventListener('mouseup', (e) => {
+                setTimeout(() => {
+                    const sel = win.getSelection();
+                    
+                    // --- 核心修复：Mac/PC 鼠标操作也应用智能吸附 ---
+                    if (!sel.isCollapsed) {
+                        snapToWord(sel); // 手动调用吸附补全
+                    }
+
+                    const text = sel.toString().trim();
+                    if (text && text.length > 0) {
+                        if (sel.rangeCount > 0) {
+                            try {
+                                const range = sel.getRangeAt(0);
+                                let node = range.startContainer;
+                                while (node && node.nodeName !== 'P' && node.parentNode) {
+                                    node = node.parentNode;
+                                }
+                                currentContextParagraph = node.textContent || text;
+                            } catch (err) {
+                                currentContextParagraph = text;
+                            }
+                        }
+                        triggerParallelAI(text);
+                    }
+                }, 10);
+            });
+        }
+
+        // ===============================================
+        //  Mobile: Touch Gesture System
+        // ===============================================
+        function setupGestureLock(contents) {
+            const doc = contents.document;
+            const win = contents.window;
+            let startX, startY, mode = null, anchorNode, anchorOffset;
+            
+            doc.body.addEventListener('touchstart', e => {
+                startX = e.touches[0].clientX; startY = e.touches[0].clientY; mode = null; 
+                const p = getPoint(doc, e.touches[0]);
+                if (p && p.node.nodeType === 3) { anchorNode = p.node; anchorOffset = p.offset; currentContextParagraph = anchorNode.parentNode.textContent; }
+            }, {passive: true});
+
+            doc.body.addEventListener('touchmove', e => {
+                const x = e.touches[0].clientX; const y = e.touches[0].clientY;
+                const dx = x - startX; const dy = y - startY;
+                if (!mode) {
+                    if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return; 
+                    if (Math.abs(dx) > Math.abs(dy) * 1.2) { mode = 'select'; win.getSelection().removeAllRanges(); haptic(15); } 
+                    else { mode = 'scroll'; }
+                }
+                if (mode === 'select') {
+                    if(e.cancelable) e.preventDefault(); 
+                    const p = getPoint(doc, e.touches[0]);
+                    if(p && p.node.nodeType === 3) { try { win.getSelection().setBaseAndExtent(anchorNode, anchorOffset, p.node, p.offset); } catch(err){} }
+                } 
+            }, {passive: false});
+
+            doc.body.addEventListener('touchend', () => {
+                if (mode === 'select') {
+                    const sel = win.getSelection();
+                    if(!sel.isCollapsed) { snapToWord(sel); const text = sel.toString().trim(); if(text) setTimeout(() => { triggerParallelAI(text); haptic(40); }, 50); }
+                }
+                mode = null;
+            });
+        }
+
+        function setupTripleTap(contents) {
+            const doc = contents.document;
+            let taps = 0;
+            let timer = null;
+            doc.body.addEventListener('click', (e) => {
+                taps++;
+                if (taps === 1) {
+                    timer = setTimeout(() => { taps = 0; }, 350);
+                } else if (taps === 2) {
+                    clearTimeout(timer);
+                    timer = setTimeout(() => { taps = 0; }, 350);
+                } else if (taps === 3) {
+                    clearTimeout(timer); toggleRuler(!rulerActive); haptic(50); taps = 0;
+                }
+            });
+        }
+
+        function setupFocusMode(contents) {
+            const doc = contents.document;
+            let activeParagraph = null;
+
+            doc.body.addEventListener('dblclick', (e) => {
+                if (rulerActive) return;
+                const target = e.target;
+                if (target.tagName === 'P' || (target.parentNode && target.parentNode.tagName === 'P')) {
+                    const p = target.tagName === 'P' ? target : target.parentNode;
+                    if (activeParagraph === p) { clearFocus(doc); activeParagraph = null; haptic(30); } 
+                    else { enterFocus(doc, p); activeParagraph = p; haptic(50); }
+                } else { clearFocus(doc); activeParagraph = null; haptic(30); }
+            });
+        }
+        function enterFocus(doc, targetP) {
+            const paragraphs = doc.querySelectorAll('p');
+            paragraphs.forEach(p => { if (p === targetP) { p.classList.add('focus-paragraph'); p.classList.remove('blur-paragraph'); } else { p.classList.add('blur-paragraph'); p.classList.remove('focus-paragraph'); } });
+        }
+        function clearFocus(doc) {
+            const paragraphs = doc.querySelectorAll('p');
+            paragraphs.forEach(p => { p.classList.remove('focus-paragraph'); p.classList.remove('blur-paragraph'); });
+        }
+
+        function getPoint(doc, t) { if(doc.caretRangeFromPoint) {const r=doc.caretRangeFromPoint(t.clientX,t.clientY); return r?{node:r.startContainer,offset:r.startOffset}:null} return null; }
+        
+        // --- 核心吸附逻辑 ---
+        function snapToWord(sel) {
+            try {
+                const r = sel.getRangeAt(0);
+                if (r.startContainer.nodeType === 3 && r.startContainer === r.endContainer) {
+                    let s = r.startOffset, e = r.endOffset;
+                    const t = r.startContainer.textContent;
+                    // 向左寻找单词边界
+                    while(s>0 && /[\w'-]/.test(t[s-1])) s--;
+                    // 向右寻找单词边界
+                    while(e<t.length && /[\w'-]/.test(t[e])) e++;
+                    r.setStart(r.startContainer, s); r.setEnd(r.endContainer, e);
+                    sel.removeAllRanges(); sel.addRange(r);
+                }
+            } catch(e){}
+        }
+
+        async function triggerParallelAI(text) {
+            const panel = document.getElementById('panel'), mask = document.getElementById('mask'), body = document.getElementById('panel-body'), key = document.getElementById('apiKey').value;
+            panel.classList.add('active'); mask.classList.add('active');
+            currentSelectedText = text;
+            const isWord = text.split(/\s+/).length <= 3;
+            if(!key) { body.innerHTML = `<div class="shell-origin">"${text}"</div><div style="text-align:center;color:#ef4444;margin-top:20px">请在菜单中输入 API Key</div>`; return; }
+
+            let originHtml = `<div class="shell-origin"><span style="flex:1">"${text}"</span><div class="tts-btn" onclick="speakCurrent()"><i class="ri-volume-up-line"></i></div></div>`;
+            
+            if (isWord) {
+                let html = originHtml + `<div id="ai-dict"><div class="skeleton" style="height:150px;border-radius:16px;margin-top:20px"></div></div>`;
+                if(enableContext) html += `<div id="ai-context" style="margin-top:20px"><div class="mod-title">语境深度解析...</div><div class="skeleton"></div></div>`;
+                body.innerHTML = html;
+                fetchDictionary(text, key);
+                if(enableContext) fetchContext(text, key);
+            } else {
+                let html = originHtml + `<div id="ai-trans"><div class="mod-title">翻译中...</div><div class="skeleton"></div></div><div id="ai-vocab" style="margin-top:20px"><div class="mod-title">分析词汇...</div><div class="skeleton"></div></div>`;
+                if(enableSyntax) html += `<div id="ai-syntax" style="margin-top:20px"><div class="mod-title">分析语法...</div><div class="skeleton"></div></div>`;
+                if(enableContext) html += `<div id="ai-context" style="margin-top:20px"><div class="mod-title">语境深度解析...</div><div class="skeleton"></div></div>`;
+                body.innerHTML = html;
+                fetchTranslation(text, key); fetchVocab(text, key);
+                if(enableSyntax) fetchSyntax(text, key);
+                if(enableContext) fetchContext(text, key);
+            }
+        }
+
+        async function callGemini(p, k) {
+            try {
+                const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${k}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({contents:[{parts:[{text:p}]}]}) });
+                const d = await r.json();
+                let t = d.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                t = t.replace(/```html|```/g, '').trim();
+                const i = t.indexOf('<div'); return i > -1 ? t.substring(i) : t;
+            } catch(e) { return null; }
+        }
+
+        async function fetchDictionary(t, k) { const h = await callGemini(`Role:Dictionary. Define "${t}" in Chinese. Output HTML:<div class="dict-card"><div class="dict-en">{Word}</div><div class="dict-ipa">/{IPA}/</div><div class="dict-cn">{Def}</div></div>`, k); if(h) document.getElementById('ai-dict').innerHTML = h; }
+        async function fetchTranslation(t, k) { const h = await callGemini(`Role:Translator. Translate "${t}" to Chinese. Output HTML:<div class="mod-title"><i class="ri-translate-2"></i> 译文</div><div class="trans-text">{Text}</div>`, k); if(h) document.getElementById('ai-trans').innerHTML = h; }
+        async function fetchVocab(t, k) { const h = await callGemini(`Role:Teacher. Pick 1-2 hard words from "${t}". Output HTML:<div class="mod-title"><i class="ri-price-tag-3-line"></i> 重点词汇</div><div class="vocab-item"><div class="vi-word">{Word}</div><div class="vi-cn">{Meaning}</div></div>. Return empty if none.`, k); if(h) document.getElementById('ai-vocab').innerHTML = h; else document.getElementById('ai-vocab').innerHTML = ''; }
+        async function fetchSyntax(t, k) { const h = await callGemini(`Role:Grammarian. Explain syntax of "${t}" briefly in Chinese. Output HTML:<div class="mod-title"><i class="ri-node-tree"></i> 语法</div><div class="syntax-box"><div class="st-tag">{Point}</div><div class="st-desc">{Desc}</div></div>`, k); if(h) document.getElementById('ai-syntax').innerHTML = h; }
+        async function fetchContext(t, k) { 
+            const h = await callGemini(`Role: Literature Expert. Explain the meaning of "${t}" in the context of: "${currentContextParagraph}". Constraint: MUST use Simplified Chinese for explanation. Output HTML:<div class="mod-title"><i class="ri-book-open-line"></i> 语境透视</div><div class="ctx-box"><div class="ctx-text">{Explanation}</div></div>`, k); 
+            if(h) document.getElementById('ai-context').innerHTML = h; 
+        }
+
+        function toggleFullScreen() {
+            const doc = window.document;
+            const docEl = doc.documentElement;
+            const requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+            const cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+            if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) { if(requestFullScreen) requestFullScreen.call(docEl); } 
+            else { if(cancelFullScreen) cancelFullScreen.call(doc); }
+        }
+        function updateFsIcon() {
+            const icon = document.getElementById('fs-icon');
+            const isFull = document.fullscreenElement || document.webkitFullscreenElement;
+            icon.className = isFull ? 'ri-fullscreen-exit-line text-xl' : 'ri-fullscreen-line text-xl';
+        }
+        document.addEventListener('fullscreenchange', updateFsIcon);
+        document.addEventListener('webkitfullscreenchange', updateFsIcon);
+
+    </script>
+</body>
+</html>
